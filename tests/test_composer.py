@@ -64,7 +64,7 @@ class TestComposer(object):
         # make sure composer is installed
         assert installer._installer.calls().once()
         assert installer._installer.calls()[0].args[0] == \
-            '/composer/1.0.0-alpha10/composer.phar', \
+            '/composer/1.0.0-alpha11/composer.phar', \
             "was %s" % installer._installer.calls()[0].args[0]
 
     def test_composer_tool_install_latest(self):
@@ -96,84 +96,6 @@ class TestComposer(object):
         assert installer._installer.calls()[0].args[0] == \
             'https://getcomposer.org/composer.phar', \
             "was %s" % installer._installer.calls()[0].args[0]
-
-    def test_composer_run_streams_output(self):
-        ctx = utils.FormattedDict({
-            'PHP_VM': 'hhvm',  # PHP strategy does other stuff
-            'BUILD_DIR': '/build/dir',
-            'CACHE_DIR': '/cache/dir',
-            'TMPDIR': tempfile.gettempdir(),
-            'WEBDIR': 'htdocs',
-            'LIBDIR': 'lib',
-            'BP_DIR': ''
-        })
-
-        instance_stub = Dingus()
-        instance_stub._set_return_value("""{"rate": {"limit": 60, "remaining": 60}}""")
-
-        stream_output_stub = Dingus()
-
-        builder = Dingus(_ctx=ctx)
-
-        with patches({
-            'StringIO.StringIO.getvalue': instance_stub,
-            'composer.extension.stream_output': stream_output_stub
-        }):
-            ct = self.extension_module.ComposerExtension(ctx)
-            ct._builder = builder
-            ct.composer_runner = \
-                    self.extension_module.ComposerCommandRunner(ctx, builder)
-            ct.run()
-            stream_output_calls = stream_output_stub.calls()
-            assert 2 == len(stream_output_calls), \
-                    "The number of stream_output calls returned %s, expected 2" % len(stream_output_stub.calls())
-            instCmd = stream_output_calls[-1].args[1]
-            assert instCmd.find('/build/dir/php/bin/composer.phar') > 0
-            assert instCmd.find('install') > 0
-            assert instCmd.find('--no-progress') > 0
-            assert instCmd.find('--no-interaction') > 0
-            assert instCmd.find('--no-dev') > 0
-
-    def test_composer_run_streams_debug_output(self):
-        ctx = utils.FormattedDict({
-            'PHP_VM': 'hhvm',  # PHP strategy does other stuff
-            'BUILD_DIR': '/build/dir',
-            'CACHE_DIR': '/cache/dir',
-            'TMPDIR': tempfile.gettempdir(),
-            'WEBDIR': 'htdocs',
-            'LIBDIR': 'lib',
-            'BP_DEBUG': 'True',
-            'BP_DIR': '',
-        })
-
-        instance_stub = Dingus(return_value="""{"rate": {"limit": 60, "remaining": 60}}""")
-
-        stream_output_stub = Dingus()
-
-        builder = Dingus(_ctx=ctx)
-
-        with patches({
-            'StringIO.StringIO.getvalue': instance_stub,
-            'composer.extension.stream_output': stream_output_stub
-        }):
-            ct = self.extension_module.ComposerExtension(ctx)
-            ct._builder = builder
-            ct.composer_runner = \
-                self.extension_module.ComposerCommandRunner(ctx, builder)
-            ct.run()
-            stream_output_calls = stream_output_stub.calls()
-            assert 3 == len(stream_output_calls), \
-                "The number of stream_output calls returned %s, expected 3" % len(stream_output_stub.calls())
-            # first is called `composer -V`
-            verCmd = stream_output_calls[0].args[1]
-            assert verCmd.find('composer.phar -V')
-            # then composer install
-            instCmd = stream_output_calls[-1].args[1]
-            assert instCmd.find('/build/dir/php/bin/composer.phar') > 0
-            assert instCmd.find('install') > 0
-            assert instCmd.find('--no-progress') > 0
-            assert instCmd.find('--no-interaction') > 0
-            assert instCmd.find('--no-dev') > 0
 
     def test_composer_tool_run_custom_composer_opts(self):
         ctx = utils.FormattedDict({
@@ -337,17 +259,6 @@ class TestComposer(object):
         assert 'zip' == ctx['PHP_EXTENSIONS'][1]
         assert 'fileinfo' == ctx['PHP_EXTENSIONS'][2]
 
-    def test_configure_composer_with_hhvm_version(self):
-        ctx = utils.FormattedDict({
-            'BUILD_DIR': 'tests/data/composer-with-hhvm',
-            'WEBDIR': '',
-            'HHVM_VERSION': '3.2.0'
-        })
-        config = self.extension_module.ComposerConfiguration(ctx)
-        config.configure()
-        assert '3.2.0' == ctx['HHVM_VERSION']
-        assert 'hhvm' == ctx['PHP_VM']
-
     def test_configure_does_not_run_when_no_composer_json(self):
         ctx = utils.FormattedDict({
             'BUILD_DIR': 'tests/data/app-1',
@@ -423,6 +334,7 @@ class TestComposer(object):
             'BUILD_DIR': '',
             'PHP_55_LATEST': '5.5.15',
             'PHP_56_LATEST': '5.6.7',
+            'PHP_70_LATEST': '7.0.100',
             'WEBDIR': ''
         }
         pick_php_version = \
@@ -440,6 +352,12 @@ class TestComposer(object):
         # exact PHP 5.6 versions
         eq_('5.6.7', pick_php_version('5.6.7'))
         eq_('5.6.6', pick_php_version('5.6.6'))
+        # latest PHP 7.0 version
+        eq_('7.0.100', pick_php_version('>=7.0'))
+        eq_('7.0.100', pick_php_version('7.0.*'))
+        # exact PHP 7.0 versions
+        eq_('7.0.1', pick_php_version('7.0.1'))
+        eq_('7.0.2', pick_php_version('7.0.2'))
         # not understood, should default to PHP_VERSION
         eq_('5.5.15', pick_php_version(''))
         eq_('5.5.15', pick_php_version(None))
@@ -511,16 +429,6 @@ class TestComposer(object):
         eq_('/tmp/build/vendor', ct._ctx['COMPOSER_VENDOR_DIR'])
         eq_('/tmp/build/bin', ct._ctx['COMPOSER_BIN_DIR'])
         eq_('/tmp/cache/custom', ct._ctx['COMPOSER_CACHE_DIR'])
-
-    def test_binary_path_for_hhvm(self):
-        ctx = utils.FormattedDict({
-            'BUILD_DIR': '/usr/awesome/',
-            'PHP_VM': 'hhvm',
-            'WEBDIR': ''
-        })
-        stg = self.extension_module.HHVMComposerStrategy(ctx)
-        path = stg.binary_path()
-        eq_('/usr/awesome/hhvm/usr/bin/hhvm', path)
 
     def test_binary_path_for_php(self):
         ctx = utils.FormattedDict({
@@ -722,16 +630,6 @@ class TestComposer(object):
         assert built_environment['PATH'].endswith(":/usr/awesome/php/bin"), \
             "PATH should contain path to PHP, found [%s]" \
             % built_environment['PATH']
-
-    def test_ld_library_path_for_hhvm(self):
-        ctx = utils.FormattedDict({
-            'BUILD_DIR': '/usr/awesome/',
-            'WEBDIR': '',
-            'PHP_VM': 'hhvm'
-        })
-        stg = self.extension_module.HHVMComposerStrategy(ctx)
-        path = stg.ld_library_path()
-        eq_('/usr/awesome/hhvm/usr/lib/hhvm', path)
 
     def test_ld_library_path_for_php(self):
         ctx = utils.FormattedDict({
